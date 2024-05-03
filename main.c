@@ -20,7 +20,7 @@ int main(void)
     const int screenHeight = 450;
     
 	SetConfigFlags(FLAG_MSAA_4X_HINT); 
-    InitWindow(screenWidth, screenHeight, "raylib [core] example - 3d camera mode");
+    InitWindow(screenWidth, screenHeight, "Raylib collision demo");
     SetWindowState(FLAG_WINDOW_RESIZABLE);
 	MaximizeWindow();
     //Create the camera
