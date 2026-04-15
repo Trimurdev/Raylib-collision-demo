@@ -12,6 +12,7 @@
 #include "raymath.h"//Vector mathh
 
 #include <stdlib.h>//Memory operations
+#include <memory.h>
 #include <float.h>//FLT_MAX
 
 /*Warning
@@ -20,60 +21,100 @@ might have some foramting and coding errors, i didn't make this into a source an
 it is a quick demo, i might do that in the c++ implementation
 */
 
-
 typedef struct {
-    Vector3 *transformedPoints;// Array of points definig the transofrmed collider
-    Vector3 *notTransformed;// Array of points defining the collider
-    int numPoints;      // Number of points in the array
-	Vector3 *normals; //Normal array, helps with detection
-	int numNormals; //Number of normals
+    Vector3 *vertices;// Array of vertices definig the base collider
+    Vector3 *t_vertices;// Array of vertices defining the transformed collider
+    int *indices; 
+
+    int numVertices;  // Number of vertices in the array
+    int numIndices; // Number of indices
+
+    BoundingBox aabb; //Axis aligned bounding box for broad phase
 } Collider;
 
-void GetNormals(Mesh mesh,Vector3 * normals) {
-    for (int i = 0; i < mesh.vertexCount; i+=3) {//Loop trough the normals and add them to the array
-        normals[i/3] = (Vector3){mesh.normals[i],mesh.normals[i+1],mesh.normals[i+2]};
-    }
-}
 
-//Fogot to add a check to check if the mesh inst empty :P
-void SetupColliderMesh(Collider *c, Mesh mesh) {
-    c->numPoints = mesh.vertexCount; //Set the numPoints as num vertices
-    c->notTransformed = (Vector3 *)malloc(mesh.vertexCount * sizeof(Vector3));//Init the non transofrmed array
-    c->transformedPoints = (Vector3 *)malloc(mesh.vertexCount * sizeof(Vector3));//Init the transofrmed array
-    int vertex = 0; //Init vertex counter
-    for (int i = 0; i < c->numPoints; i++) {
-        c->notTransformed[i] = (Vector3){mesh.vertices[vertex], mesh.vertices[vertex + 1], mesh.vertices[vertex + 2]}; // Create the vertex position using mesh data
-        vertex += 3; // Add 3 since raylib uses a float array for vertices instead of Vector3, each float is either x, y or z 
+typedef struct{
+    Vector3 normal;
+    float depth;
+    bool collided;
+}BasicCollisionInfo;
+
+//Sets up the collider
+void SetupColliderMesh(Collider* c, Mesh mesh);
+
+//Gets the min and max of the axis
+void GetMinMax(Collider* b, Vector3 axis, float* min, float* max);
+
+//Gets the middle point of the collider
+Vector3 GetMiddlePoint(Vector3* vertices,int numVertices);
+
+//Helper function to test all the axies and detect any overlap
+bool TestFaceAxes(Collider* a, Collider* b, float* depth, Vector3* bestAxis);
+
+//Test collision
+BasicCollisionInfo CheckCollision(Collider* a, Collider* b);
+
+//Not optimal, doesn't include rotation and scaling
+void UpdateCollider(Vector3 parent,Collider *c);
+
+//Applys the transform matrix to the points and the normals, this includes rotation and scaling
+void UpdateCollider(Collider* c,Matrix transform);
+
+//Unloads the collider
+void UnloadCollider(Collider *c);
+
+
+void SetupColliderMesh(Collider* c, Mesh mesh) {
+    c->numVertices = mesh.vertexCount; //Set the numVertices as num vertices
+    
+    if(mesh.indices){
+        c->numIndices = mesh.triangleCount * 3;
+        c->indices = (int* )malloc(mesh.triangleCount * 3 * sizeof(int));
+        memcpy(c->indices, mesh.indices, mesh.triangleCount * 3 * sizeof(int));
+    }else{ // Fill the indices by the vertices since no index data is available
+        c->indices = (int* )malloc(mesh.vertexCount * sizeof(int));
+        for (int i = 0; i < mesh.vertexCount; i++)
+        {
+            c->indices[i] = i;
+        }
+        c->numIndices = mesh.vertexCount ;
     }
    
-    /*The tirangle and normal count are the same, for this case, otherwise when using smoothshading
-    i recommend to use sizeof function on the normals array*/
-    c->numNormals = mesh.triangleCount; 
-    c->normals = (Vector3 *)malloc(mesh.triangleCount * sizeof(Vector3)); //Init normal array
-    GetNormals(mesh,*&c->normals);//Set the normal data
+    
+    c->vertices = (Vector3 *)malloc(mesh.vertexCount * sizeof(Vector3));//Init the transformed array
+    c->t_vertices = (Vector3 *)malloc(mesh.vertexCount * sizeof(Vector3));//Init the transformed array
+    c->aabb.min = (Vector3){FLT_MAX,FLT_MAX,FLT_MAX};
+    c->aabb.max = (Vector3){-FLT_MAX,-FLT_MAX,-FLT_MAX};
+    for (int i = 0; i < c->numVertices; i++) {
+        c->vertices[i] = (Vector3){mesh.vertices[i * 3], mesh.vertices[i*3 + 1], mesh.vertices[i*3 + 2]}; // Create the vertex position using mesh data
+        c->t_vertices[i] = (Vector3){mesh.vertices[i * 3], mesh.vertices[i*3 + 1], mesh.vertices[i*3 + 2]}; // Create the vertex position using mesh data
+    
+        c->aabb.min = Vector3Min(c->aabb.min,c->vertices[i]);
+        c->aabb.max = Vector3Max(c->aabb.max,c->vertices[i]);
+    }
+
 }
 
-
-void GetMinMax(Collider b, Vector3 axis, float *min, float *max) {
-    *min = Vector3DotProduct(b.transformedPoints[0], axis); //Initialize min as the first vertex
+void GetMinMax(Collider* b, Vector3 axis, float* min, float* max) {
+    *min = Vector3DotProduct(b->t_vertices[0], axis); //Initialize min as the first vertex
     *max = *min;  // Initialize max with the same value as min
 
-    for (int i = 1; i < b.numPoints; i++) { //Loop trough the vertices
+    for (int i = 1; i < b->numVertices; i++) { //Loop trough the vertices
         //Find the dot product between the vertex and the axis
-        float dot = Vector3DotProduct(b.transformedPoints[i], axis);
-        //Check if the dot is smaller then min, if it is set the new min
+        float dot = Vector3DotProduct(b->t_vertices[i], axis);
+        //Check if the dot product is smaller then min, if it is set the new min
         if (dot < *min) {
             *min = dot;
         }
-        //Check if the dot is bigger then max, if it is set the new max
+        //Check if the dot product is bigger then max, if it is set the new max
         if (dot > *max) {
             *max = dot;
         }
     }
 }
 
-Vector3 GetMiddlePoint(Vector3 *vertices,int numVertices){
-	float x=0,y=0,z=0;//Init variables
+Vector3 GetMiddlePoint(Vector3* vertices,int numVertices){
+	float x=0,y=0,z=0;//Initialize variables
 	for(int i = 0; i < numVertices;i++){//Iterate trought the vertices and get the sum
        //Add all the vertex values togerher
        x+= vertices[i].x; 
@@ -83,66 +124,104 @@ Vector3 GetMiddlePoint(Vector3 *vertices,int numVertices){
 	return(Vector3){x/numVertices,y/numVertices,z/numVertices}; //Divide the values to get the average(Middle)
 } 
 
-bool CheckCollision(Collider a, Collider b, Vector3 *normal) {
-    *normal = (Vector3){0, 0, 0}; //Init normal vector
-    float depth = FLT_MAX; //Init depth as the max value it can be
+bool TestFaceAxes(Collider* a, Collider* b, float* depth, Vector3* bestAxis)
+{
+    //Loop trough all the vertices and calculate the normals
+    for (int i = 0; i < a->numIndices; i += 3)
+    {
+        //Grab the right indexes
+        int i0 = a->indices[i];
+        int i1 = a->indices[i + 1];
+        int i2 = a->indices[i + 2];
 
-    for (int i = 0; i < a.numNormals; i++) {
-        float min1, max1, min2, max2;
-       GetMinMax(a, a.normals[i], &min2, &max2);
-       GetMinMax(b, a.normals[i], &min1, &max1);
+        //Get the normal vectors
+        Vector3 v0 = a->t_vertices[i0];
+        Vector3 v1 = a->t_vertices[i1];
+        Vector3 v2 = a->t_vertices[i2];
 
-        if (max1 < min2 || max2 < min1) {
-            return false;  // No collision on this axis
-        } else {
-            float axisDepth = fminf(max2 - min1, max1 - min2);
-            if (axisDepth < depth) {
-                depth = axisDepth;
-                *normal = a.normals[i];
-            }
+
+        //Calculate the normal/axis
+        Vector3 edge1 = Vector3Subtract(v1, v0);
+        Vector3 edge2 = Vector3Subtract(v2, v0);
+
+        Vector3 axis = Vector3Normalize(Vector3CrossProduct(edge1, edge2));
+
+        //Skip if invalid axis
+        if (Vector3LengthSqr(axis) < 1e-6f) continue;
+
+        //Test overlap
+        float minA, maxA, minB, maxB;
+        GetMinMax(a, axis, &minA, &maxA);
+        GetMinMax(b, axis, &minB, &maxB);
+
+
+        if (maxA < minB || maxB < minA)
+            return false;
+
+        //Calculate and return the depth
+        float d = fminf(maxA - minB, maxB - minA);
+        if (d < *depth)
+        {
+            *depth = d;
+            *bestAxis = Vector3Normalize(axis);
         }
     }
-
-    for (int i = 0; i < b.numNormals; i++) {
-        float min1, max1, min2, max2;
-        GetMinMax(a, b.normals[i], &min2, &max2);
-        GetMinMax(b, b.normals[i], &min1, &max1);
-
-        if (max1 < min2 || max2 < min1) {
-            return false;  // No collision on this axis
-        } else {
-            float axisDepth = fminf(max2 - min1, max1 - min2);
-            if (axisDepth < depth) {
-                depth = axisDepth;
-                *normal = b.normals[i];
-            }
-        }
-    }
-
-    // Simplify direction calculation
-    Vector3 direction = Vector3Subtract(GetMiddlePoint(a.transformedPoints, a.numPoints), GetMiddlePoint(b.transformedPoints,b.numPoints));
-
-    if (Vector3DotProduct(direction, *normal) < 0.0f) {
-        *normal = Vector3Negate(*normal);
-    }
-    *normal = Vector3Scale(*normal, depth);
     return true;
 }
 
-//Not optimal, doesn't include rotation and scaling, it's a simple demo
+BasicCollisionInfo CheckCollision(Collider* a, Collider* b) {
+    BasicCollisionInfo result = {0};
+    result.depth = FLT_MAX;
+    result.normal  = {0};
+
+    // Face normals
+    if (!TestFaceAxes(a, b, &result.depth, &result.normal)) return result;
+    if (!TestFaceAxes(b, a, &result.depth, &result.normal)) return result;
+
+    // Fix direction
+    Vector3 centerA = GetMiddlePoint(a->t_vertices, a->numVertices);
+    Vector3 centerB = GetMiddlePoint(b->t_vertices, b->numVertices);
+
+    Vector3 dir = Vector3Subtract(centerA, centerB);
+
+    if (Vector3DotProduct(dir, result.normal) < 0)
+        result.normal = Vector3Negate(result.normal);
+
+    result.collided = true;
+
+    return result;
+}
+
 void UpdateCollider(Vector3 parent,Collider *c){
     //Loop trough the points and add them to the 
-    for(int i = 0; i < c->numPoints;i++){
-        c->transformedPoints[i] = Vector3Add( c->notTransformed[i],parent);
+    c->aabb.min = (Vector3){FLT_MAX,FLT_MAX,FLT_MAX};
+    c->aabb.max = (Vector3){-FLT_MAX,-FLT_MAX,-FLT_MAX};
+    for(int i = 0; i < c->numVertices;i++){
+        c->t_vertices[i] = Vector3Add( c->vertices[i],parent);
+
+        c->aabb.min = Vector3Min(c->aabb.min,c->t_vertices[i]);
+        c->aabb.max = Vector3Max(c->aabb.max,c->t_vertices[i]);
     }
 }
 
-void UnloadCollider(Collider *collider){
-    free(collider->normals);
-    free(collider->transformedPoints);
-    free(collider->notTransformed);
+void UpdateCollider(Collider* c,Matrix transform){
+    //Loop trough the points and add them to the 
+    c->aabb.min = (Vector3){FLT_MAX,FLT_MAX,FLT_MAX};
+    c->aabb.max = (Vector3){-FLT_MAX,-FLT_MAX,-FLT_MAX};
+    for(int  i = 0; i < c->numVertices;i++){
+        c->t_vertices[i] = Vector3Transform(c->vertices[i],transform);
+
+        c->aabb.min = Vector3Min(c->aabb.min,c->t_vertices[i]);
+        c->aabb.max = Vector3Max(c->aabb.max,c->t_vertices[i]);
+    }
 }
 
+void UnloadCollider(Collider *c){
+    //Free all the arrays
+    free(c->indices);
+    free(c->vertices);
+    free(c->t_vertices);
+}
 
 #endif
 

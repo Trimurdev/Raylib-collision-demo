@@ -8,10 +8,14 @@
 
 
 #include "raylib.h"
+#include "rcamera.h"
 #include "raymath.h"
 #include <stdio.h>
 #include "Collision.h"
 #define GLSL_VERSION  330
+
+
+void DrawCollider(Collider* c);
 
 int main(void)
 {
@@ -30,30 +34,27 @@ int main(void)
     camera.up = (Vector3){ 0.0f, 1.0f, 0.0f };         
     camera.fovy = 90.0f;                               
     camera.projection = CAMERA_PERSPECTIVE;            
-    //Create player veriables
+    //Create player variables
     Vector3 PlayerPosition = { 0.0f, 2.0f, 0.0f };
     Vector3 PlayerVelocity = { 0.0f, 0.0f, 0.0f };
-    float rotationX = 0,rotationY = 0;
-    //Define input settings
-	float sensitivity = 0.01f;
-    Vector2 OldMousePos = GetMousePosition();
+    float playerSpeed = 5.0f;
 	//Physics values
 	float DampeningValue = 0.24f;
 	float Gravity = 9.7f;
     //Set the fps
-    SetTargetFPS(60);  
+    SetTargetFPS(-1);  
 	//Load in the shader
-	Shader shader = LoadShader(TextFormat("shaders/shader.vs", GLSL_VERSION),
-                               TextFormat("shaders/shader.fs", GLSL_VERSION));
+	Shader shader = LoadShader(TextFormat("src/shaders/shader.vs", GLSL_VERSION),
+                               TextFormat("src/shaders/shader.fs", GLSL_VERSION));
     //Tell the shader where the viewPosition location is
 	shader.locs[SHADER_LOC_VECTOR_VIEW] = GetShaderLocation(shader, "viewPos");
 	
 	//Load in models
     //Only works with blender meshes since raylib creates the meshes with more normals and triangulates them a bit weird
-	Model Cylinder = LoadModel("models/cylinder.obj"); 
-	Model Floor = LoadModel("models/cube.obj");
-	Model Ramp = LoadModel("models/Ramp.obj");
-	Model Sphere = LoadModel("models/sphere.obj");
+	Model Cylinder = LoadModel("src/models/cylinder.obj"); 
+	Model Floor = LoadModel("src/models/cube.obj");
+	Model Ramp = LoadModel("src/models/Ramp.obj");
+	Model Sphere = LoadModel("src/models/sphere.obj");
 	//Cylinder material setup
 	Cylinder.materials[0].shader = shader;
 	Cylinder.materials[0].maps[MATERIAL_MAP_DIFFUSE].color = BLUE;
@@ -97,46 +98,51 @@ int main(void)
     //Update the colliders
     for(int i = 0; i < NumColliders;i++)UpdateCollider(positions[i],&colliders[i]);
    
-	Vector3 normal = {0}; //Init the normal value
 	
     //Disable the cursor so it doesn't get in the way
     DisableCursor();
+
+    //Debug
+    bool showDebug = false;
     
     // Main game loop
     while (!WindowShouldClose())    
     {
-		
+        float dt = GetFrameTime();
+        UpdateCamera(&camera,CAMERA_FIRST_PERSON);
+
+        //Toggle debug
+        if(IsKeyPressed(KEY_F3)){
+            showDebug = !showDebug;
+        }
+
 	
 		//Take care of the physics
 		PlayerVelocity.y -= Gravity*GetFrameTime(); // Gravity
 		PlayerVelocity = Vector3Scale(PlayerVelocity,DampeningValue); //Dampen the velocity
 		PlayerPosition = Vector3Add(PlayerPosition,PlayerVelocity);
-		//Player input camera
-		rotationY +=  GetMouseDelta().x*sensitivity;
-		rotationX -=  GetMouseDelta().y*sensitivity;
-		OldMousePos = GetMousePosition();
+
+		//Camera management
+        Vector3 Forward = GetCameraForward(&camera);
+        Vector3 Right = GetCameraRight(&camera);
+        
 		
-		//Player rotation 
-		Vector3 Foward = (Vector3){sin(-rotationY),sin(rotationX),cos(-rotationY)}; //Use sin and cos to find the forward vector
-		Vector3 Right = (Vector3){cos(rotationY),0,sin(rotationY)}; //Use sin and cos to find the right vector
-       
-		
-		camera.target = Vector3Add(PlayerPosition,Foward);
+		camera.target = Vector3Add(PlayerPosition,Forward);
 		camera.position = PlayerPosition;
         
 		//Player movement
-		Foward.y = 0;//Set the y to 0 
+		Forward.y = 0;//Set the y to 0 
      
         //Check for player input
-		if(IsKeyDown(KEY_W))PlayerPosition = Vector3Add(PlayerPosition,Vector3Scale(Foward,0.1f));
-		if(IsKeyDown(KEY_S))PlayerPosition = Vector3Subtract(PlayerPosition,Vector3Scale(Foward,0.1f));
+		if(IsKeyDown(KEY_W))PlayerPosition = Vector3Add(PlayerPosition,Vector3Scale(Forward,dt * playerSpeed));
+		if(IsKeyDown(KEY_S))PlayerPosition = Vector3Subtract(PlayerPosition,Vector3Scale(Forward,dt * playerSpeed));
 		
-		if(IsKeyDown(KEY_A))PlayerPosition = Vector3Add(PlayerPosition,Vector3Scale(Right,0.1f));
-		if(IsKeyDown(KEY_D))PlayerPosition = Vector3Subtract(PlayerPosition,Vector3Scale(Right,0.1f));
+		if(IsKeyDown(KEY_A))PlayerPosition = Vector3Subtract(PlayerPosition,Vector3Scale(Right,dt * playerSpeed));
+		if(IsKeyDown(KEY_D))PlayerPosition = Vector3Add(PlayerPosition,Vector3Scale(Right,dt * playerSpeed));
 		
 		if(IsKeyDown(KEY_SPACE) ){
-		PlayerVelocity.y += 0.4f;//Add velocity
-		PlayerPosition.y += 0.3f;//Add a bit of position since i set the gravity to 0 when in collision
+		PlayerVelocity.y += 4.4f * dt;//Add velocity
+		PlayerPosition.y += 4.3f * dt;//Add a bit of position since i set the gravity to 0 when in collision
 		}
         
 		//Update shader camera position
@@ -144,15 +150,21 @@ int main(void)
         SetShaderValue(shader, shader.locs[SHADER_LOC_VECTOR_VIEW], cameraPos, SHADER_UNIFORM_VEC3);
 		
 		//Take care of the collision
-		UpdateCollider(PlayerPosition,&Player);
+		UpdateCollider(Vector3Subtract(PlayerPosition,(Vector3){0,1,0}),&Player);
         //Loop trough the colliders
 		for(int i = 0; i < NumColliders;i++){
 			//Update the collider
 			//UpdateCollider(positions[i],&colliders[i]); Not needed since the colliders are static
 			//Check the collision between the player and other colliders
-			if(CheckCollision(Player,colliders[i],&normal)){
-				PlayerPosition = Vector3Add(PlayerPosition,normal);
-			}
+
+            if(CheckCollisionBoxes(Player.aabb,colliders[i].aabb)){ //Broadphase 
+                BasicCollisionInfo info = CheckCollision(&Player,&colliders[i]);
+                if(info.collided){
+                    PlayerPosition = Vector3Add(PlayerPosition,Vector3Scale(info.normal,info.depth));
+                }
+            }
+            
+		
 		}
         
         
@@ -162,12 +174,23 @@ int main(void)
 
             BeginMode3D(camera);//Set the mode to 3d using our camera
 			    //Draw all the models, models are all offset otherwise use position array
-                DrawModel(Floor,(Vector3){0,1,0},1,WHITE);
-                DrawModel(Cylinder,(Vector3){2,0,2},1,WHITE);
-                DrawModel(Ramp,(Vector3){-2,0.4f,-2},1,WHITE);
-                DrawModel(Sphere,(Vector3){2,0.8f,-1},1,WHITE);
+                DrawModel(Floor,positions[2],1,WHITE);
+                DrawModel(Cylinder,positions[1],1,WHITE);
+                DrawModel(Ramp,positions[0],1,WHITE);
+                DrawModel(Sphere,positions[3],1,WHITE);
                 //Draw the grid
                 DrawGrid(10, 1.0f);		
+
+                //Draw debug wireframes
+                if(showDebug){
+                    DrawCollider(&Player);
+                    for (size_t i = 0; i < NumColliders; i++)
+                    {
+                        DrawCollider(&colliders[i]);
+                    }
+                }
+               
+                
             EndMode3D();
                DrawFPS(10, 10);//Draw fps
         EndDrawing();
@@ -182,12 +205,21 @@ int main(void)
     UnloadModel(Ramp);
     UnloadModel(Sphere);
     //Free the colliders
-    free(positions);
     for(int i = 0; i < NumColliders;i++)UnloadCollider(&colliders[i]);
-    free(colliders);
-
+    
     
     CloseWindow();       
 
     return 0;
+}
+
+
+void DrawCollider(Collider* c){
+    DrawBoundingBox(c->aabb,RED);
+
+    for (size_t i = 0; i < c->numIndices; i+=2)
+    {
+        DrawLine3D(c->t_vertices[c->indices[i]],c->t_vertices[c->indices[i+1]],GREEN);
+    }
+    
 }

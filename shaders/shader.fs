@@ -29,10 +29,10 @@ void main()
    
     vec4 texelColor = colDiffuse;
     //Diffuse
-	vec3 viewDir = normalize(viewPos - fragPosition);
-	vec3 lightDir = normalize(LightPos - fragPosition);
-	float NdotL = max(0.1f,dot(fragNormal, lightDir));
-    float spec = pow(max(0.0, dot(viewDir, reflect(-(lightDir), fragNormal))), 16.0); // 16 refers to shine
+	vec3 viewDir = normalize(viewPos - Position);
+	vec3 lightDir = normalize(LightPos - Position);
+	float NdotL = max(0.1f,dot(Normal, lightDir));
+    float spec = pow(max(0.0, dot(viewDir, reflect(-(lightDir), Normal))), 16.0); // 16 refers to shine
 	
 	vec3 diffuse = texelColor.rgb *  NdotL;
 
